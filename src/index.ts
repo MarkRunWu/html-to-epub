@@ -19,6 +19,7 @@ import mime from "mime";
 import { basename, dirname, resolve } from "path";
 import rehypeParse from "rehype-parse";
 import rehypeStringify from "rehype-stringify";
+import sharp from "sharp";
 import { Plugin, unified } from "unified";
 import { visit } from "unist-util-visit";
 import { fileURLToPath } from "url";
@@ -291,6 +292,7 @@ export interface EpubOptions {
   tempDir?: string;
   allowedAttributes?: string[];
   allowedXhtml11Tags?: string[];
+  maxImageWidth?: number;
 }
 
 interface EpubContent {
@@ -362,6 +364,7 @@ export class EPub {
   allowedXhtml11Tags: string[];
   coverMetaContent: string | null;
   startOfContentHref: string;
+  maxImageWidth: number | null;
 
   constructor(options: EpubOptions, output: string) {
     // File ID
@@ -415,6 +418,7 @@ export class EPub {
     this.verbose = options.verbose ?? false;
     this.allowedAttributes = options.allowedAttributes ?? defaultAllowedAttributes;
     this.allowedXhtml11Tags = options.allowedXhtml11Tags ?? defaultAllowedXhtml11Tags;
+    this.maxImageWidth = options.maxImageWidth ?? null;
 
     // Temporary folder for work
     this.tempDir = options.tempDir ?? resolve(__dirname, "../tempDir/");
@@ -868,11 +872,49 @@ export class EPub {
       for (let index = 0; index < this.images.length; index++) {
         await this.downloadMedia(this.images[index], "images");
       }
+      await this.downsampleImages(resolve(this.tempEpubDir, "./OEBPS/images"));
     }
     if (this.audioVideo.length > 0) {
       mkdirSync(resolve(this.tempEpubDir, "./OEBPS/audiovideo"));
       for (let index = 0; index < this.audioVideo.length; index++) {
         await this.downloadMedia(this.audioVideo[index], "audiovideo");
+      }
+    }
+  }
+
+  private async downsampleImages(imagesDir: string): Promise<void> {
+    if (!this.maxImageWidth) {
+      return;
+    }
+
+    const files = fsExtra.readdirSync(imagesDir);
+    for (const file of files) {
+      const filepath = resolve(imagesDir, file);
+      try {
+        const image = sharp(filepath);
+        const metadata = await image.metadata();
+
+        if (!metadata.width || metadata.width <= this.maxImageWidth) {
+          continue;
+        }
+
+        await image
+          .resize(this.maxImageWidth, undefined, {
+            withoutEnlargement: true,
+            fit: "inside",
+          })
+          .toFile(`${filepath}.tmp`);
+
+        unlinkSync(filepath);
+        fsExtra.moveSync(`${filepath}.tmp`, filepath);
+
+        if (this.verbose) {
+          console.log(`[Downsample Success] Downsampled image to width ${this.maxImageWidth}: ${filepath}`);
+        }
+      } catch (err) {
+        if (this.verbose) {
+          console.error("[Downsample Error]", `Error while downsampling ${filepath}:`, err);
+        }
       }
     }
   }
