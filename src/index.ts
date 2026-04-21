@@ -872,12 +872,55 @@ export class EPub {
       for (let index = 0; index < this.images.length; index++) {
         await this.downloadMedia(this.images[index], "images");
       }
+      await this.convertWebpToJpeg(resolve(this.tempEpubDir, "./OEBPS/images"));
       await this.downsampleImages(resolve(this.tempEpubDir, "./OEBPS/images"));
     }
     if (this.audioVideo.length > 0) {
       mkdirSync(resolve(this.tempEpubDir, "./OEBPS/audiovideo"));
       for (let index = 0; index < this.audioVideo.length; index++) {
         await this.downloadMedia(this.audioVideo[index], "audiovideo");
+      }
+    }
+  }
+
+  private async convertWebpToJpeg(imagesDir: string): Promise<void> {
+    const files = fsExtra.readdirSync(imagesDir);
+    for (const file of files) {
+      if (!file.toLowerCase().endsWith(".webp")) {
+        continue;
+      }
+
+      const filepath = resolve(imagesDir, file);
+      const newFilepath = resolve(imagesDir, file.replace(/\.webp$/i, ".jpeg"));
+      const mediaId = file.replace(/\.webp$/i, "");
+
+      try {
+        await sharp(filepath).jpeg({ quality: 90 }).toFile(newFilepath);
+
+        unlinkSync(filepath);
+
+        // Update extension in images array
+        const mediaItem = this.images.find((img) => img.id === mediaId);
+        if (mediaItem) {
+          mediaItem.extension = "jpeg";
+
+          // Update src in content HTML
+          const webpSrc = `images/${mediaId}.webp`;
+          const jpegSrc = `images/${mediaId}.jpeg`;
+          for (const contentItem of this.content) {
+            if (contentItem.data.includes(webpSrc)) {
+              contentItem.data = contentItem.data.replace(new RegExp(webpSrc, "g"), jpegSrc);
+            }
+          }
+        }
+
+        if (this.verbose) {
+          console.log(`[Convert Success] Converted webp to jpeg: ${filepath} -> ${newFilepath}`);
+        }
+      } catch (err) {
+        if (this.verbose) {
+          console.error("[Convert Error]", `Error while converting ${filepath}:`, err);
+        }
       }
     }
   }
